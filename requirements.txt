@@ -1,0 +1,10 @@
+opencv-python
+fer
+matplotlib
+moviepy
+pandas
+numpy
+seaborn
+SpeechRecognition
+ffmpeg-python
+nltk
