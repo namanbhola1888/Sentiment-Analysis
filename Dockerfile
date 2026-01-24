@@ -41,7 +41,7 @@ COPY . .
 RUN mkdir -p uploads
 
 # Expose port
-EXPOSE 5000
+EXPOSE 8080
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1

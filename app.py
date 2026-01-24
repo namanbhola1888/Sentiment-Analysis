@@ -902,7 +902,7 @@ if __name__ == '__main__':
     logger.info("=" * 60)
     
     # Run the app
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 8080))
     host = '0.0.0.0'  # Important for Docker
     
     logger.info(f"Starting server on {host}:{port}")
