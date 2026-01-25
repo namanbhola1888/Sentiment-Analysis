@@ -5,10 +5,13 @@ services:
     build: .
     platform: linux/amd64
     ports:
-      - "5000:5000"
+      - "8080:8080"
     environment:
       - FLASK_ENV=production
       - SUPABASE_URL
       - SUPABASE_KEY
       - SUPABASE_SERVICE_KEY
+      - PYTHONHTTPSVERIFY=0
+      - CURL_CA_BUNDLE="" 
+      - SSL_CERT_FILE=""
     restart: unless-stopped

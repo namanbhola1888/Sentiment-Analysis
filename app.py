@@ -31,13 +31,16 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 from datetime import datetime, timezone
 import shutil
-
+import ssl
 
 # Load environment variables
 load_dotenv()
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
+
+os.environ['PYTHONHTTPSVERIFY'] = '0'
+ssl._create_default_https_context = ssl._create_unverified_context
 
 # Configure logging
 logging.basicConfig(

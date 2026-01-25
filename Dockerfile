@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     libgl1 \
     wget \
     curl \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -49,7 +50,7 @@ ENV FLASK_ENV=production
 
 # Optional safe health check for Render
 HEALTHCHECK --interval=60s --timeout=3s --start-period=30s --retries=5 \
-    CMD curl -fs http://localhost:5000/api/health || echo "Health check failed"
+    CMD curl -fs http://localhost:8080/api/health || echo "Health check failed"  
 
 
 # Run the Flask app
