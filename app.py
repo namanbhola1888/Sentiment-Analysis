@@ -72,43 +72,30 @@ SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 SUPABASE_SERVICE_KEY = os.getenv('SUPABASE_SERVICE_KEY', SUPABASE_KEY)
 
+# Check if Supabase credentials exist
 if not SUPABASE_URL or not SUPABASE_KEY:
     logger.error("Missing Supabase credentials in .env file!")
-    raise ValueError("Please set SUPABASE_URL and SUPABASE_KEY in .env file")
-
-# Initialize Supabase client
-try:
-    # Create custom SSL context
-    ssl_context = ssl.create_default_context(cafile=certifi.where())
-    
-    # Initialize with custom HTTP client for better timeout handling
-    from httpx import Timeout
-    import httpx
-    
-    http_client = httpx.Client(
-        timeout=Timeout(30.0),  # 30 second timeout
-        verify=certifi.where(),  # Use certifi certificates
-    )
-    
-    supabase: Client = create_client(
-        SUPABASE_URL, 
-        SUPABASE_KEY,
-        http_client=http_client
-    )
-    
-    logger.info("Supabase client initialized successfully with SSL")
-    
-    # Test connection (non-blocking, don't crash if fails)
-    try:
-        response = supabase.table('jobs').select('count', count='exact').limit(1).execute()
-        logger.info(f"Supabase connection test successful")
-    except Exception as test_error:
-        logger.warning(f"Supabase test query failed (continuing): {test_error}")
-    
-except Exception as e:
-    logger.error(f"Failed to initialize Supabase client: {e}")
-    logger.warning("⚠️ Running without Supabase - some features disabled")
+    logger.warning("⚠️ Running without Supabase - features limited")
     supabase = None
+else:
+    # Initialize Supabase client
+    try:
+        # SIMPLE initialization without custom http_client
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        
+        logger.info("✅ Supabase client initialized successfully")
+        
+        # Test connection (non-blocking, don't crash if fails)
+        try:
+            response = supabase.table('jobs').select('count', count='exact').limit(1).execute()
+            logger.info(f"Supabase connection test successful")
+        except Exception as test_error:
+            logger.warning(f"Supabase test query failed (continuing): {test_error}")
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize Supabase client: {e}")
+        logger.warning("⚠️ Running without Supabase - some features disabled")
+        supabase = None
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
