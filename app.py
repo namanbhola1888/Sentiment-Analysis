@@ -32,15 +32,13 @@ from dotenv import load_dotenv
 from datetime import datetime, timezone
 import shutil
 import ssl
+import certifi
 
 # Load environment variables
 load_dotenv()
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
-
-os.environ['PYTHONHTTPSVERIFY'] = '0'
-ssl._create_default_https_context = ssl._create_unverified_context
 
 # Configure logging
 logging.basicConfig(
@@ -51,10 +49,15 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
+
+# Set SSL certificates for production
+os.environ['SSL_CERT_FILE'] = certifi.where()
+os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 # Configuration
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB
@@ -75,21 +78,41 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 # Initialize Supabase client
 try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    logger.info("Supabase client initialized successfully")
+    # Create custom SSL context
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
     
-    # Test connection
-    response = supabase.table('jobs').select('count', count='exact').limit(1).execute()
-    logger.info(f"Supabase connection test successful. Jobs count: {response.count}")
+    # Initialize with custom HTTP client for better timeout handling
+    from httpx import Timeout
+    import httpx
+    
+    http_client = httpx.Client(
+        timeout=Timeout(30.0),  # 30 second timeout
+        verify=certifi.where(),  # Use certifi certificates
+    )
+    
+    supabase: Client = create_client(
+        SUPABASE_URL, 
+        SUPABASE_KEY,
+        http_client=http_client
+    )
+    
+    logger.info("Supabase client initialized successfully with SSL")
+    
+    # Test connection (non-blocking, don't crash if fails)
+    try:
+        response = supabase.table('jobs').select('count', count='exact').limit(1).execute()
+        logger.info(f"Supabase connection test successful")
+    except Exception as test_error:
+        logger.warning(f"Supabase test query failed (continuing): {test_error}")
+    
 except Exception as e:
     logger.error(f"Failed to initialize Supabase client: {e}")
+    logger.warning("⚠️ Running without Supabase - some features disabled")
     supabase = None
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-
-logger = logging.getLogger(__name__)
 
 def get_ffmpeg_path():
     """
@@ -164,110 +187,135 @@ def fig_to_base64(fig, dpi=150):
         logger.error(f"Error converting figure to Base64: {e}")
         return None
 
+import time
+import random
+
 def save_job_to_supabase(job_id, filename, duration, status, progress, message, **kwargs):
-    """Save or update job status in Supabase."""
+    """Save or update job status in Supabase with retry."""
     if not supabase:
         logger.error("Supabase client not initialized")
         return False
     
-    try:
-        # Prepare data
-        data = {
-            'job_id': job_id,
-            'filename': filename,
-            'duration': duration,
-            'status': status,
-            'progress': progress,
-            'message': message,
-            'ffmpeg_available': FFMPEG_AVAILABLE,
-            'updated_at': datetime.now(timezone.utc).isoformat()
-        }
-        
-        # Add optional fields if provided
-        for key, value in kwargs.items():
-            if value is not None:
-                data[key] = value
-        
-        # Update completed_at timestamp if job is completed
-        if status == 'completed':
-            data['completed_at'] = datetime.now(timezone.utc).isoformat()
-        
-        logger.debug(f"Saving job data to Supabase: {job_id}, status: {status}")
-        
-        # Check if job exists
-        existing = supabase.table('jobs').select('*').eq('job_id', job_id).execute()
-        
-        if existing.data:
-            # Update existing job
-            response = supabase.table('jobs').update(data).eq('job_id', job_id).execute()
-            logger.debug(f"Updated job {job_id} in Supabase")
-        else:
-            # Create new job
-            response = supabase.table('jobs').insert(data).execute()
-            logger.debug(f"Created new job {job_id} in Supabase")
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"Error saving job to Supabase: {e}")
-        logger.error(traceback.format_exc())
-        return False
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        try:
+            # Prepare data
+            data = {
+                'job_id': job_id,
+                'filename': filename,
+                'duration': duration,
+                'status': status,
+                'progress': progress,
+                'message': message,
+                'ffmpeg_available': FFMPEG_AVAILABLE,
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }
+            
+            # Add optional fields if provided
+            for key, value in kwargs.items():
+                if value is not None:
+                    data[key] = value
+            
+            # Update completed_at timestamp if job is completed
+            if status == 'completed':
+                data['completed_at'] = datetime.now(timezone.utc).isoformat()
+            
+            logger.debug(f"Saving job data to Supabase: {job_id}, status: {status}")
+            
+            # Check if job exists with retry
+            for check_attempt in range(2):
+                try:
+                    existing = supabase.table('jobs').select('*').eq('job_id', job_id).execute()
+                    break
+                except Exception as e:
+                    if check_attempt < 1:
+                        time.sleep(0.5)
+                        continue
+                    raise
+            
+            if existing.data:
+                # Update existing job
+                response = supabase.table('jobs').update(data).eq('job_id', job_id).execute()
+                logger.debug(f"Updated job {job_id} in Supabase")
+            else:
+                # Create new job
+                response = supabase.table('jobs').insert(data).execute()
+                logger.debug(f"Created new job {job_id} in Supabase")
+            
+            return True
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = (2 ** attempt) + random.random()
+                logger.warning(f"Supabase save failed, retrying in {wait_time:.1f}s: {str(e)[:100]}")
+                time.sleep(wait_time)
+                continue
+            logger.error(f"Error saving job to Supabase after {max_retries} attempts: {e}")
+            return False
 
 def get_job_from_supabase(job_id):
-    """Get job status from Supabase."""
+    """Get job status from Supabase with retry."""
     if not supabase:
         return None
     
-    try:
-        response = supabase.table('jobs').select('*').eq('job_id', job_id).execute()
-        
-        if response.data and len(response.data) > 0:
-            job = response.data[0]
-            logger.debug(f"Retrieved job from Supabase: {job_id}")
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        try:
+            response = supabase.table('jobs').select('*').eq('job_id', job_id).execute()
             
-            # Build response dictionary
-            result = {
-                'status': job.get('status'),
-                'progress': job.get('progress', 0),
-                'message': job.get('message', ''),
-                'video_heatmap_data': job.get('video_heatmap_data'),
-                'text_heatmap_data': job.get('text_heatmap_data'),
-                'transcript': job.get('transcript', ''),
-                'duration': job.get('duration', 0),
-                'frames_analyzed': job.get('frames_analyzed', 0),
-                'ffmpeg_available': job.get('ffmpeg_available', False)
-            }
+            if response.data and len(response.data) > 0:
+                job = response.data[0]
+                logger.debug(f"Retrieved job from Supabase: {job_id}")
+                
+                # Build response dictionary
+                result = {
+                    'status': job.get('status'),
+                    'progress': job.get('progress', 0),
+                    'message': job.get('message', ''),
+                    'video_heatmap_data': job.get('video_heatmap_data'),
+                    'text_heatmap_data': job.get('text_heatmap_data'),
+                    'transcript': job.get('transcript', ''),
+                    'duration': job.get('duration', 0),
+                    'frames_analyzed': job.get('frames_analyzed', 0),
+                    'ffmpeg_available': job.get('ffmpeg_available', False)
+                }
+                
+                # Build sentiment dictionary
+                sentiment = {
+                    'neg': job.get('sentiment_neg', 0),
+                    'neu': job.get('sentiment_neu', 0),
+                    'pos': job.get('sentiment_pos', 0),
+                    'compound': job.get('sentiment_compound', 0)
+                }
+                result['sentiment'] = sentiment
+                
+                # Build emotion summary dictionary
+                emotion_summary = {
+                    'angry': job.get('emotion_angry', 0),
+                    'disgust': job.get('emotion_disgust', 0),
+                    'fear': job.get('emotion_fear', 0),
+                    'happy': job.get('emotion_happy', 0),
+                    'sad': job.get('emotion_sad', 0),
+                    'surprise': job.get('emotion_surprise', 0),
+                    'neutral': job.get('emotion_neutral', 0)
+                }
+                result['emotion_summary'] = emotion_summary
+                
+                return result
             
-            # Build sentiment dictionary
-            sentiment = {
-                'neg': job.get('sentiment_neg', 0),
-                'neu': job.get('sentiment_neu', 0),
-                'pos': job.get('sentiment_pos', 0),
-                'compound': job.get('sentiment_compound', 0)
-            }
-            result['sentiment'] = sentiment
+            logger.warning(f"No job found in Supabase for ID: {job_id}")
+            return None
             
-            # Build emotion summary dictionary
-            emotion_summary = {
-                'angry': job.get('emotion_angry', 0),
-                'disgust': job.get('emotion_disgust', 0),
-                'fear': job.get('emotion_fear', 0),
-                'happy': job.get('emotion_happy', 0),
-                'sad': job.get('emotion_sad', 0),
-                'surprise': job.get('emotion_surprise', 0),
-                'neutral': job.get('emotion_neutral', 0)
-            }
-            result['emotion_summary'] = emotion_summary
-            
-            return result
-        
-        logger.warning(f"No job found in Supabase for ID: {job_id}")
-        return None
-        
-    except Exception as e:
-        logger.error(f"Error getting job from Supabase: {e}")
-        logger.error(traceback.format_exc())
-        return None
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = (2 ** attempt) + random.random()
+                logger.warning(f"Supabase query failed, retrying in {wait_time:.1f}s: {str(e)[:100]}")
+                time.sleep(wait_time)
+                continue
+            logger.error(f"Error getting job from Supabase after {max_retries} attempts: {e}")
+            return None
 
 def analyze_video(video_path, job_id, filename):
     """Main analysis function."""

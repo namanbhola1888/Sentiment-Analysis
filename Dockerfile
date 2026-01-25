@@ -7,12 +7,15 @@ RUN apt-get update && apt-get install -y \
     libsm6 \
     libxext6 \
     libxrender-dev \
+    libssl-dev \
     libglib2.0-0 \
     libgl1 \
     wget \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+RUN update-ca-certificates --fresh
 
 # Set working directory
 WORKDIR /app
