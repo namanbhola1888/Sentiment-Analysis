@@ -5,6 +5,8 @@ let eventSource = null;
 let startTime = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;
+let progressStuckTimeout = null;
+const PROGRESS_STUCK_THRESHOLD = 100000; // 60 seconds
 
 // DOM Elements
 const uploadArea = document.getElementById('uploadArea');
@@ -113,6 +115,16 @@ async function checkBackend() {
         const statusEl = document.getElementById('statusInfo');
         statusEl.textContent = 'Backend: Connection Failed';
         statusEl.style.color = '#ff5252';
+    }
+}
+
+async function checkSupabaseConnection() {
+    try {
+        const response = await fetch('/api/health');
+        const data = await response.json();
+        return data.supabase === true;
+    } catch {
+        return false;
     }
 }
 
@@ -382,6 +394,13 @@ function showFreeInstanceError() {
 async function uploadVideo() {
     if (!currentFile) return;
     
+    // Check Supabase connection first
+    // const supabaseConnected = await checkSupabaseConnection();
+    // if (!supabaseConnected) {
+    //     showError('Database connection failed. Please refresh and try again.');
+    //     return;
+    // }
+
     const formData = new FormData();
     formData.append('video', currentFile);
     
@@ -531,6 +550,18 @@ function updateProgressUI(data) {
     const progress = data.progress || 0;
     const message = data.message || '';
     
+    // Reset stuck timer if progress changed
+    if (progress > parseInt(document.getElementById('progressPercent').textContent)) {
+        if (progressStuckTimeout) {
+            clearTimeout(progressStuckTimeout);
+        }
+        progressStuckTimeout = setTimeout(() => {
+            if (parseInt(document.getElementById('progressPercent').textContent) < 20) {
+                handleProcessingError('Processing stuck. Please try again.');
+            }
+        }, PROGRESS_STUCK_THRESHOLD);
+    }
+    
     // Update progress bar
     document.getElementById('progressPercent').textContent = `${progress}%`;
     document.getElementById('progressFill').style.width = `${progress}%`;
@@ -567,6 +598,11 @@ function handleProcessingError(message) {
         eventSource = null;
     }
     
+     if (progressStuckTimeout) {
+        clearTimeout(progressStuckTimeout);
+        progressStuckTimeout = null;
+    }
+
     // Show server error popup (generic message)
     showServerError();
     

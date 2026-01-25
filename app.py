@@ -136,10 +136,10 @@ def get_ffmpeg_path():
         # PRODUCTION MODE (default):
         # Use system FFmpeg or fail - comment when testing locally
         # ================================================
-        ffmpeg_path = shutil.which('ffmpeg')
-        if ffmpeg_path:
-            logger.info(f"✅ Using system FFmpeg at {ffmpeg_path}")
-            return ffmpeg_path
+        # ffmpeg_path = shutil.which('ffmpeg')
+        # if ffmpeg_path:
+        #     logger.info(f"✅ Using system FFmpeg at {ffmpeg_path}")
+        #     return ffmpeg_path
         
         raise RuntimeError("FFmpeg not found. Use Docker for production or uncomment local path.")
 
@@ -950,6 +950,8 @@ if __name__ == '__main__':
     # Start cleanup thread
     cleanup_thread = threading.Thread(target=cleanup_worker, daemon=True)
     cleanup_thread.start()
+
+    is_docker = os.path.exists('/.dockerenv')
     
     logger.info("=" * 60)
     logger.info("Starting Emotion Analysis API")
@@ -958,8 +960,11 @@ if __name__ == '__main__':
     logger.info(f"Supabase connected: {supabase is not None}")
     logger.info("=" * 60)
     
-    # Run the app
-    port = int(os.environ.get('PORT', 8080))
+    # Use different ports for Docker vs Local
+    if is_docker:
+        port = int(os.environ.get('PORT', 5000))  # Docker uses 5000
+    else:
+        port = int(os.environ.get('PORT', 5000))  # Local also uses 5000
     host = '0.0.0.0'  # Important for Docker
     
     logger.info(f"Starting server on {host}:{port}")
