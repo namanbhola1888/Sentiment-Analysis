@@ -273,6 +273,14 @@ def analyze_video(video_path, job_id, filename):
     """Main analysis function."""
     detector = None
     vidcap = None
+
+    start_time = time.time()
+    FREE_TIER_TIMEOUT = 4 * 60  # 4 minutes in seconds
+    
+    # Check if free instances are busy (simulated by elapsed time > 4 min)
+    # This is a simplified check - in real app, track actual queue/load
+    if time.time() - start_time > FREE_TIER_TIMEOUT:
+        return {"error": "Free instance busy. Please try again later."}
     
     try:
         # Save initial job status

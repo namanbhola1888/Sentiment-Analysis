@@ -314,6 +314,70 @@ function showServerError() {
     }
 }
 
+
+// Show free instance error message
+function showFreeInstanceError() {
+    const existingPopup = document.querySelector('.free-instance-popup');
+    if (existingPopup) return;
+    
+    const popup = document.createElement('div');
+    popup.className = 'free-instance-popup';
+    popup.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #ff9800;  // Orange warning color
+        color: white;
+        padding: 15px 20px;
+        border-radius: 8px;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        z-index: 10000;
+        animation: slideIn 0.3s ease;
+        max-width: 350px;
+    `;
+    
+    const message = document.createElement('div');
+    message.innerHTML = `
+        <strong style="display: block; margin-bottom: 8px;">⚠️ Free Instance Busy</strong>
+        <div style="font-size: 13px; line-height: 1.4;">
+            Processing takes longer than 4 minutes when all free instances are busy.<br>
+            Please try again in 2-3 minutes or use a shorter video.
+        </div>
+    `;
+    
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '×';
+    closeBtn.style.cssText = `
+        position: absolute;
+        top: 5px;
+        right: 10px;
+        background: none;
+        border: none;
+        color: white;
+        font-size: 20px;
+        cursor: pointer;
+        padding: 0;
+    `;
+    closeBtn.onclick = () => popup.remove();
+    
+    popup.appendChild(message);
+    popup.appendChild(closeBtn);
+    document.body.appendChild(popup);
+    
+    // Auto-remove after 8 seconds (longer message)
+    setTimeout(() => {
+        if (popup.parentNode) {
+            popup.remove();
+        }
+    }, 8000);
+    
+    // Show upload section again
+    document.querySelector('.upload-section').style.display = 'block';
+    processingSection.style.display = 'none';
+    analyzeBtn.disabled = false;
+    analyzeBtn.innerHTML = '<i class="fas fa-play"></i> Start Analysis';
+}
+
 // Upload video for analysis
 async function uploadVideo() {
     if (!currentFile) return;
@@ -383,6 +447,14 @@ function connectToSSE(timeInterval) {
         try {
             const data = JSON.parse(event.data);
             
+            // ADD THIS CHECK - Specific for "Free instance busy" error
+            if (data.error && data.error.includes('Free instance busy')) {
+                showFreeInstanceError();
+                clearInterval(timeInterval);
+                eventSource.close();
+                return;
+            }
+
             if (data.error) {
                 handleProcessingError(data.error);
                 clearInterval(timeInterval);
