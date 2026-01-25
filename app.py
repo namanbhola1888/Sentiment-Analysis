@@ -89,10 +89,12 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+logger = logging.getLogger(__name__)
 
 def get_ffmpeg_path():
     """
-    Simple detection: Always use system FFmpeg in Docker.
+    Production: Always use system FFmpeg in Docker.
+    For local testing: Uncomment Windows path below.
     """
     # Check if we're in Docker (container)
     is_docker = os.path.exists('/.dockerenv')
@@ -101,31 +103,40 @@ def get_ffmpeg_path():
         # In Docker: always use system-installed FFmpeg
         ffmpeg_path = shutil.which('ffmpeg')
         if ffmpeg_path:
-            print(f"✅ Docker: Using system FFmpeg at {ffmpeg_path}")
+            logger.info(f"✅ Docker: Using system FFmpeg at {ffmpeg_path}")
             return ffmpeg_path
         else:
-            # This should never happen if Dockerfile is correct
-            raise RuntimeError("FFmpeg not found in Docker container! Check Dockerfile installation.")
+            raise RuntimeError("FFmpeg not found in Docker container!")
+    
     else:
-        # Local development: try Windows path
-        windows_path = r'C:\\ffmpeg\\ffmpeg-n8.0-latest-win64-gpl-8.0\\bin\\ffmpeg.exe'
-        if os.path.exists(windows_path):
-            print(f"✅ Local: Using Windows FFmpeg")
-            return windows_path
+        # ================================================
+        # FOR LOCAL DEVELOPMENT (without Docker):
+        # Uncomment the block below when testing locally
+        # ================================================
         
-        # Fallback: try system FFmpeg if available
+        """
+        # Local Windows development path
+        windows_path = r'C:\ffmpeg\ffmpeg-n8.0-latest-win64-gpl-8.0\bin\ffmpeg.exe'
+        if os.path.exists(windows_path):
+            logger.info(f"✅ Local: Using Windows FFmpeg")
+            return windows_path
+        """
+        
+        # ================================================
+        # PRODUCTION MODE (default):
+        # Use system FFmpeg or fail - comment when testing locally
+        # ================================================
         ffmpeg_path = shutil.which('ffmpeg')
         if ffmpeg_path:
-            print(f"✅ Local: Found FFmpeg in PATH")
+            logger.info(f"✅ Using system FFmpeg at {ffmpeg_path}")
             return ffmpeg_path
         
-        raise RuntimeError("FFmpeg not found locally. Install FFmpeg or use Docker.")
+        raise RuntimeError("FFmpeg not found. Use Docker for production or uncomment local path.")
 
 # Initialize
 FFMPEG_PATH = get_ffmpeg_path()
 FFMPEG_AVAILABLE = FFMPEG_PATH is not None
 
-print(f"Using FFmpeg path: {FFMPEG_PATH}")
 logger.info(f"FFmpeg available: {FFMPEG_AVAILABLE}, path: {FFMPEG_PATH}")
 
 def fig_to_base64(fig, dpi=150):
