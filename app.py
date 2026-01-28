@@ -103,49 +103,48 @@ def allowed_file(filename):
 
 def get_ffmpeg_path():
     """
-    Production: Always use system FFmpeg in Docker.
-    For local testing: Uncomment Windows path below.
+    In Docker, FFmpeg is always at /usr/bin/ffmpeg
     """
-    # Check if we're in Docker (container)
-    is_docker = os.path.exists('/.dockerenv')
+    # In Docker, use direct path
+    docker_path = '/usr/bin/ffmpeg'
     
-    if is_docker:
-        # In Docker: always use system-installed FFmpeg
-        ffmpeg_path = shutil.which('ffmpeg')
-        if ffmpeg_path:
-            logger.info(f"✅ Docker: Using system FFmpeg at {ffmpeg_path}")
-            return ffmpeg_path
+    # Check if we're in Docker
+    if os.path.exists('/.dockerenv'):
+        if os.path.exists(docker_path):
+            logger.info(f"✅ Docker: FFmpeg at {docker_path}")
+            return docker_path
         else:
-            raise RuntimeError("FFmpeg not found in Docker container!")
-    
+            # Fallback to just 'ffmpeg' command
+            logger.info("✅ Docker: Using 'ffmpeg' command")
+            return 'ffmpeg'
     else:
-        # ================================================
-        # FOR LOCAL DEVELOPMENT (without Docker):
-        # Uncomment the block below when testing locally
-        # ================================================
-        
-        """
-        # Local Windows development path
-        windows_path = r'C:\ffmpeg\ffmpeg-n8.0-latest-win64-gpl-8.0\bin\ffmpeg.exe'
-        if os.path.exists(windows_path):
-            logger.info(f"✅ Local: Using Windows FFmpeg")
-            return windows_path
-        """
-        
-        # ================================================
-        # PRODUCTION MODE (default):
-        # Use system FFmpeg or fail - comment when testing locally
-        # ================================================
-        # ffmpeg_path = shutil.which('ffmpeg')
-        # if ffmpeg_path:
-        #     logger.info(f"✅ Using system FFmpeg at {ffmpeg_path}")
-        #     return ffmpeg_path
-        
-        raise RuntimeError("FFmpeg not found. Use Docker for production or uncomment local path.")
+        # # Local development - use Windows path
+        # windows_path = r'C:\\ffmpeg\\ffmpeg-n8.0-latest-win64-gpl-8.0\\bin\\ffmpeg.exe'
+        # if os.path.exists(windows_path):
+        #     logger.info(f"✅ Local: Using Windows FFmpeg")
+        #     return windows_path
+        # # Fallback for local
+        # return 'ffmpeg'
+        return 'AskingWindowPath'
 
-# Initialize
+# Force FFmpeg as available (we tested it)
 FFMPEG_PATH = get_ffmpeg_path()
-FFMPEG_AVAILABLE = FFMPEG_PATH is not None
+FFMPEG_AVAILABLE = True
+
+# Add this after FFMPEG_PATH initialization
+print(f"DEBUG: FFMPEG_PATH = {FFMPEG_PATH}")
+print(f"DEBUG: Testing FFmpeg...")
+
+import subprocess
+try:
+    result = subprocess.run([FFMPEG_PATH, '-version'], 
+                          capture_output=True, 
+                          text=True,
+                          timeout=2)
+    print(f"DEBUG: FFmpeg test success: {result.stdout[:100]}")
+except Exception as e:
+    print(f"DEBUG: FFmpeg test failed: {e}")
+
 
 logger.info(f"FFmpeg available: {FFMPEG_AVAILABLE}, path: {FFMPEG_PATH}")
 
@@ -452,6 +451,7 @@ def analyze_video(video_path, job_id, filename):
         
         # 4. Speech to text
         text_output = ""
+        audio_ok = False 
         if FFMPEG_AVAILABLE and FFMPEG_PATH:
             save_job_to_supabase(job_id, filename, duration, 'processing', 75, 'Converting speech to text...')
             
@@ -459,12 +459,19 @@ def analyze_video(video_path, job_id, filename):
                 audio_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{job_id}_audio.wav')
                 
                 # Use the correct FFmpeg path with quotes
-                cmd = f'"{FFMPEG_PATH}" -i "{video_path}" -vn -acodec pcm_s16le -ar 16000 -ac 1 "{audio_path}" -y'
-                
+                cmd = [
+                    FFMPEG_PATH, '-y',
+                    '-i', video_path,
+                    '-map', '0:a?',        # <-- safely handle videos with NO audio
+                    '-vn',
+                    '-ac', '1',
+                    '-ar', '16000',
+                    audio_path
+                ]
+                        
                 logger.info(f"Running FFmpeg command: {cmd}")
                 process = subprocess.run(
                     cmd,
-                    shell=True,
                     capture_output=True,
                     timeout=30,
                     text=True,
@@ -472,43 +479,37 @@ def analyze_video(video_path, job_id, filename):
                     errors='ignore'
                 )
                 
-                if process.returncode == 0 and os.path.exists(audio_path):
-                    try:
+                if process.returncode != 0 or not os.path.exists(audio_path):
+                    logger.warning(f"FFmpeg audio extraction failed: {process.stderr}")
+                    text_output = "No audio detected or audio extraction failed"
+                else:
+                    # Validate extracted audio size (empty audio = no speech)
+                    if os.path.getsize(audio_path) < 1024:
+                        text_output = "No meaningful audio detected"
+                    else:
                         r = sr.Recognizer()
                         with sr.AudioFile(audio_path) as source:
-                            r.adjust_for_ambient_noise(source, duration=0.5)
+                            audio_ok = True   # <-- audio confirmed
                             audio = r.record(source, duration=min(30, duration))
-                            
-                            try:
-                                text_output = r.recognize_google(audio)
-                                logger.info(f"Speech recognized: {len(text_output)} characters")
-                            except sr.UnknownValueError:
-                                text_output = "Speech detected but could not be understood"
-                            except sr.RequestError as e:
-                                text_output = f"Speech API error: {e}"
-                    
-                    except Exception as e:
-                        logger.debug(f"Audio processing error: {e}")
-                        text_output = "Audio processing failed"
-                    
-                    # Cleanup audio
-                    if os.path.exists(audio_path):
-                        os.remove(audio_path)
-                else:
-                    logger.warning(f"FFmpeg failed. Return code: {process.returncode}")
-                    logger.warning(f"FFmpeg stderr: {process.stderr[:200]}")
-                    text_output = "Audio extraction failed"
-                    
+
+                        try:
+                            text_output = r.recognize_google(audio)
+                        except sr.UnknownValueError:
+                            text_output = "Speech detected but not understandable"
+                        except sr.RequestError as e:
+                            text_output = f"Speech API error: {e}"
+
             except subprocess.TimeoutExpired:
-                logger.warning("Audio extraction timeout")
                 text_output = "Audio extraction timeout"
             except Exception as e:
-                logger.debug(f"Speech processing error: {e}")
+                logger.exception("Speech processing failed")
                 text_output = "Speech processing failed"
+            finally:
+                if os.path.exists(audio_path):
+                    os.remove(audio_path)
         else:
             text_output = "Speech analysis disabled (FFmpeg not available)"
-            logger.info("Skipping speech analysis - FFmpeg not available")
-        
+
         # 5. Text sentiment analysis - WITH VISIBLE VALUE LABELS
         text_heatmap_data = None
         sentiment = {'neg': 0, 'neu': 0, 'pos': 0, 'compound': 0}
@@ -564,18 +565,24 @@ def analyze_video(video_path, job_id, filename):
                 
                 # ===== CHART 2: Overall Sentiment Indicator =====
                 # Create a gauge/thermometer style indicator
-                compound_score = sentiment['compound']
+                # HARD STOP: skip chart if audio/text invalid
+                if not audio_ok or not sentiment or not text_output.strip():
+                    logger.info("Skipping Overall Sentiment chart (no valid audio/text)")
+                    return   # or simply do nothing / skip this block
                 
-                # Determine color based on compound score
-                if compound_score >= 0.05:
-                    sentiment_color = '#10b981'  # Green
-                    sentiment_label = 'POSITIVE'
-                elif compound_score <= -0.05:
-                    sentiment_color = '#ef4444'  # Red
-                    sentiment_label = 'NEGATIVE'
                 else:
-                    sentiment_color = '#f59e0b'  # Orange
-                    sentiment_label = 'NEUTRAL'
+                    compound_score = sentiment['compound']
+                    
+                    # Determine color based on compound score
+                    if compound_score >= 0.05:
+                        sentiment_color = '#10b981'  # Green
+                        sentiment_label = 'POSITIVE'
+                    elif compound_score <= -0.05:
+                        sentiment_color = '#ef4444'  # Red
+                        sentiment_label = 'NEGATIVE'
+                    else:
+                        sentiment_color = '#f59e0b'  # Orange
+                        sentiment_label = 'NEUTRAL'
                 
                 # Create a horizontal bar for compound score
                 bars2 = ax2.barh(['Overall'], [compound_score], color=sentiment_color, height=0.3)

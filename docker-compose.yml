@@ -11,7 +11,4 @@ services:
       - SUPABASE_URL
       - SUPABASE_KEY
       - SUPABASE_SERVICE_KEY
-      - PYTHONHTTPSVERIFY=0
-      - CURL_CA_BUNDLE="" 
-      - SSL_CERT_FILE=""
     restart: unless-stopped

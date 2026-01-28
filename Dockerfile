@@ -1,60 +1,37 @@
-# Use Python 3.11 full image (more libs pre-installed)
-FROM --platform=linux/amd64 python:3.11
+FROM python:3.11-slim AS build
 
-# Install system dependencies including FFmpeg
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender-dev \
-    libssl-dev \
-    libglib2.0-0 \
-    libgl1 \
-    wget \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN update-ca-certificates --fresh
-
-# Set working directory
 WORKDIR /app
 
-# Copy only requirements first (Docker caching)
+# Copy requirements
 COPY requirements.txt .
 
-# Upgrade pip
-RUN python -m pip install --upgrade pip
+# Install requirements in one go (better compatibility)
+RUN pip install --default-timeout=300 --retries=10 --no-cache-dir -r requirements.txt
 
-# Install heavy packages separately for caching
-RUN pip --default-timeout=300 install --no-cache-dir \
-    tensorflow==2.20.0 \
-    torch==2.9.1 torchvision==0.24.1 \
-    opencv-python==4.12.0.88 opencv-contrib-python==4.12.0.88
-
-# Install remaining packages
-RUN pip --default-timeout=300 install --no-cache-dir -r requirements.txt
+# Copy app code
+COPY . .
 
 # Download NLTK data
 RUN python -c "import nltk; nltk.download('vader_lexicon', quiet=True)"
 
-# Copy the rest of the application
-COPY . .
-
-# Create necessary directories
+# Create directories
 RUN mkdir -p uploads
 
-# Expose port
 EXPOSE 5000
 
-# Environment variables
 ENV PYTHONUNBUFFERED=1
 ENV FLASK_ENV=production
 
-# Optional safe health check for Render
-HEALTHCHECK --interval=60s --timeout=3s --start-period=30s --retries=5 \
-    CMD curl -fs http://localhost:8080/api/health || echo "Health check failed"  
-
-
-# Run the Flask app
 CMD ["python", "app.py"]
