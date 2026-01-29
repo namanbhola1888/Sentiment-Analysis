@@ -22,6 +22,6 @@
 
 * Clone the project repository.
 * Install required dependencies.
-* Add a short MP4 video (20–40 seconds).
+* Add a short MP4 video (max 25 seconds).
 * Update the video file name in `settings.py`.
 * Run the `Video_Analytics.py` script.
