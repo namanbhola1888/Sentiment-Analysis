@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Emotion Analysis</title>
+    <link rel="stylesheet" href="static\css\style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="icon" type="image/png" href="static/images/favicon.png">
+</head>
+
+
+
+<body>
+    <div class="container">
+        <!-- Header Section -->
+        <header class="header">
+            <h1><i class="fas fa-brain"></i> Video Emotion Analysis</h1>
+            <p class="subtitle">
+                Upload a video (max 25s) for facial emotion and speech sentiment analysis.
+                Results include detailed heatmaps and analytics.
+            </p>
+        </header>
+
+        <!-- Upload Section -->
+        <div class="upload-section">
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                </div>
+                <h3>Drag & Drop Video</h3>
+                <p>MP4, AVI, MOV, MKV • Max 25 seconds • 50MB limit</p>
+                <button class="browse-btn" onclick="document.getElementById('fileInput').click()">
+                    <i class="fas fa-folder-open"></i> Browse Files
+                </button>
+                <input type="file" id="fileInput" accept="video/*" hidden>
+            </div>
+
+            <div class="file-info" id="fileInfo" style="display: none;">
+                <div class="file-header">
+                    <span><i class="fas fa-file-video"></i> <span id="fileName"></span></span>
+                    <button class="remove-btn" onclick="clearFile()"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="file-details">
+                    <span id="fileSize"></span>
+                    <span id="fileDuration"></span>
+                </div>
+            </div>
+
+            <div class="error-message" id="errorMessage" style="display: none;"></div>
+
+            <button class="analyze-btn" id="analyzeBtn" disabled onclick="uploadVideo()">
+                <i class="fas fa-play"></i> Start Analysis
+            </button>
+        </div>
+
+        <!-- Processing Section -->
+        <div class="processing-section" id="processingSection" style="display: none;">
+            <h3><i class="fas fa-cogs"></i> Processing Video</h3>
+            
+            <div class="progress-container">
+                <div class="progress-header">
+                    <span class="progress-percent" id="progressPercent">0%</span>
+                    <span class="progress-time" id="progressTime">0s</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                </div>
+                <div class="progress-message" id="progressMessage">Initializing...</div>
+            </div>
+
+            <div class="processing-steps">
+                <div class="step" id="step1">
+                    <i class="fas fa-video step-icon"></i>
+                    <span>Video Load</span>
+                    <span class="step-status" id="step1Status">Pending</span>
+                </div>
+                <div class="step" id="step2">
+                    <i class="fas fa-face-smile step-icon"></i>
+                    <span>Face Analysis</span>
+                    <span class="step-status" id="step2Status">Pending</span>
+                </div>
+                <div class="step" id="step3">
+                    <i class="fas fa-comments step-icon"></i>
+                    <span>Speech Analysis</span>
+                    <span class="step-status" id="step3Status">Pending</span>
+                </div>
+                <div class="step" id="step4">
+                    <i class="fas fa-chart-bar step-icon"></i>
+                    <span>Heatmaps</span>
+                    <span class="step-status" id="step4Status">Pending</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div class="results-section" id="resultsSection" style="display: none;">
+            <h3><i class="fas fa-chart-line"></i> Analysis Results</h3>
+            
+            <!-- Summary Stats -->
+            <div class="summary-stats" id="summaryStats"></div>
+
+            <!-- Heatmaps -->
+            <div class="heatmaps-container">
+                <div class="heatmap-card">
+                    <div class="heatmap-header">
+                        <h4><i class="fas fa-face-smile-beam"></i> Facial Emotions</h4>
+                        <button class="download-btn" onclick="downloadHeatmap('video')">
+                            <i class="fas fa-download"></i>
+                        </button>
+                    </div>
+                    <div class="heatmap-content">
+                        <img id="videoHeatmap" class="heatmap-img" alt="Emotion Heatmap">
+                    </div>
+                </div>
+
+                <div class="heatmap-card">
+                    <div class="heatmap-header">
+                        <h4><i class="fas fa-comments"></i> Text Sentiment</h4>
+                        <button class="download-btn" onclick="downloadHeatmap('text')">
+                            <i class="fas fa-download"></i>
+                        </button>
+                    </div>
+                    <div class="heatmap-content">
+                        <img id="textHeatmap" class="heatmap-img" alt="Sentiment Heatmap">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Detailed Results -->
+            <div class="detailed-results">
+                <div class="result-card">
+                    <h4><i class="fas fa-file-alt"></i> Transcript</h4>
+                    <div class="transcript" id="transcript"></div>
+                </div>
+
+                <div class="result-card">
+                    <h4><i class="fas fa-chart-pie"></i> Emotion Distribution</h4>
+                    <div class="emotion-grid" id="emotionGrid"></div>
+                </div>
+
+                <div class="result-card">
+                    <h4><i class="fas fa-chart-bar"></i> Sentiment Scores</h4>
+                    <div class="sentiment-scores" id="sentimentScores"></div>
+                </div>
+            </div>
+
+            <button class="new-analysis-btn" onclick="resetAnalysis()">
+                <i class="fas fa-redo"></i> New Analysis
+            </button>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Video Emotion Analysis Tool • Facial emotion and speech sentiment detection</p>
+            <p class="status-info" id="statusInfo"></p>
+        </footer>
+    </div>
+    <script>
+        window.addEventListener("load", () => {
+            document.getElementById("page-loader").style.display = "none";
+        });
+    </script>
+
+    <script src="static\js\script.js"></script>
+</body>
+</html>
