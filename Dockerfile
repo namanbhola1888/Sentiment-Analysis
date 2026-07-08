@@ -1,56 +1,75 @@
-# Use Python 3.11 full image (more libs pre-installed)
-FROM --platform=linux/amd64 python:3.11
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1: Builder — install all Python dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+FROM --platform=linux/amd64 python:3.11-slim AS builder
 
-# Install system dependencies including FFmpeg
-RUN apt-get update && apt-get install -y \
+# System build deps (only what pip needs to compile wheels)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /install
+
+# Upgrade pip + wheel tooling
+RUN pip install --upgrade pip setuptools wheel --no-cache-dir
+
+# ── Layer A: CPU-only PyTorch (saves ~2 GB vs CUDA build) ─────────────────
+# Render has no GPU — the full CUDA wheel is pure waste.
+RUN pip install --no-cache-dir \
+    "torch==2.9.1+cpu" \
+    "torchvision==0.24.1+cpu" \
+    --extra-index-url https://download.pytorch.org/whl/cpu
+
+# ── Layer B: TensorFlow ────────────────────────────────────────────────────
+RUN pip install --no-cache-dir "tensorflow==2.20.0"
+
+# ── Layer C: Headless OpenCV (no GUI libs needed in a container) ───────────
+RUN pip install --no-cache-dir "opencv-python-headless==4.12.0.88"
+
+# ── Layer D: Remaining app requirements ───────────────────────────────────
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Pre-download NLTK vader_lexicon at build time (avoids runtime download)
+RUN python -c "import nltk; nltk.download('vader_lexicon', quiet=True)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2: Runtime — slim final image with only what's needed
+# ─────────────────────────────────────────────────────────────────────────────
+FROM --platform=linux/amd64 python:3.11-slim
+
+# Runtime system deps only (no build tools in the final image)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsm6 \
     libxext6 \
-    libxrender-dev \
-    libglib2.0-0 \
     libgl1 \
-    wget \
+    libglib2.0-0 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy only requirements first (Docker caching)
-COPY requirements.txt .
+# Copy the entire installed Python site-packages from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Upgrade pip
-RUN python -m pip install --upgrade pip
+# Copy NLTK data downloaded during build
+COPY --from=builder /root/nltk_data /root/nltk_data
 
-# Install heavy packages first (separate layer = better Docker cache reuse)
-RUN pip --default-timeout=300 install --no-cache-dir \
-    tensorflow==2.20.0 \
-    "torch==2.9.1" "torchvision==0.24.1" \
-    "opencv-python==4.12.0.88" "opencv-contrib-python==4.12.0.88"
-
-# Install remaining packages (heavy ones already cached above, pip skips them)
-RUN pip --default-timeout=300 install --no-cache-dir -r requirements.txt
-
-# Download NLTK data
-RUN python -c "import nltk; nltk.download('vader_lexicon', quiet=True)"
-
-# Copy the rest of the application
+# Copy application source (done last — most frequently changing layer)
 COPY . .
 
-# Create necessary directories
 RUN mkdir -p uploads
 
-# Expose port
 EXPOSE 5000
 
-# Environment variables
 ENV PYTHONUNBUFFERED=1
 ENV FLASK_ENV=production
+# Tell matplotlib/FER to run headless
+ENV MPLBACKEND=Agg
 
-# Optional safe health check for Render
-HEALTHCHECK --interval=60s --timeout=3s --start-period=30s --retries=5 \
-    CMD curl -fs http://localhost:5000/api/health || echo "Health check failed"
+HEALTHCHECK --interval=60s --timeout=10s --start-period=90s --retries=3 \
+    CMD curl -fs http://localhost:5000/api/health || exit 1
 
-
-# Run the Flask app
 CMD ["python", "app.py"]

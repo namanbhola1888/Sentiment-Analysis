@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, send_file, Response, render_template
 from flask_cors import CORS
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import os
 import uuid
 import threading
@@ -170,11 +171,16 @@ def fig_to_base64(fig, dpi=150):
 # ---------------------------------------------------------------------------
 PHASE_TIMEOUTS = {
     'video_load':      15,
-    'frame_analysis':  90,   # FER on MTCNN can be slow
+    'frame_analysis':  60,   # total budget for ALL frames
     'heatmap_gen':     30,
     'speech_to_text':  40,
     'sentiment':       20,
 }
+
+# Hard timeout per individual FER detect_emotions() call.
+# MTCNN on CPU can take 5-15s per frame on Render's free tier.
+# If a single call exceeds this, we skip the frame and move on.
+PER_FRAME_TIMEOUT = 8  # seconds
 
 
 def analyze_video(video_path: str, job_id: str, filename: str):
@@ -234,16 +240,28 @@ def analyze_video(video_path: str, job_id: str, filename: str):
 
         # ── Phase 2: Facial emotion detection ─────────────────────────────
         save_job(job_id, status='processing', progress=15,
-                 message='😐 Phase 2/5 — Initialising face detector...')
+                 message='😐 Phase 2/5 — Initialising face detector (this may take a moment)...')
 
+        # Use Haar-cascade fallback (no MTCNN) on deployed servers — MTCNN on
+        # CPU is extremely slow (15-30s per frame) and causes the phase to time out.
+        # MTCNN is only worth using if you have a GPU.
+        is_docker = os.path.exists('/.dockerenv')
+        use_mtcnn = not is_docker  # MTCNN locally only; Haar on server
         try:
-            detector = FER(mtcnn=True)
-        except Exception:
-            detector = FER()  # Fallback without MTCNN
+            detector = FER(mtcnn=use_mtcnn)
+            logger.info(f"FER initialised — mtcnn={use_mtcnn}")
+        except Exception as init_err:
+            logger.warning(f"FER init failed ({init_err}), falling back to Haar")
+            try:
+                detector = FER(mtcnn=False)
+            except Exception as fallback_err:
+                raise RuntimeError(
+                    f'❌ Phase 2 failed: Could not initialise face detector — {fallback_err}'
+                )
 
         vidcap = cv2.VideoCapture(video_path)
         if not vidcap.isOpened():
-            raise RuntimeError("❌ Phase 2 failed: Could not open video for frame extraction.")
+            raise RuntimeError('❌ Phase 2 failed: Could not open video for frame extraction.')
 
         fps = vidcap.get(cv2.CAP_PROP_FPS)
         if fps == 0 or fps > 60:
@@ -252,19 +270,26 @@ def analyze_video(video_path: str, job_id: str, filename: str):
         frames_to_process = min(int(duration), 25)
         emotions_data = []
         phase_start = time.time()
+        timed_out_frames = 0
 
-        logger.info(f"Processing {frames_to_process} frames at {fps:.1f} FPS")
+        logger.info(f"Processing {frames_to_process} frames at {fps:.1f} FPS "
+                    f"(per-frame cap: {PER_FRAME_TIMEOUT}s, "
+                    f"total cap: {PHASE_TIMEOUTS['frame_analysis']}s)")
 
         for i in range(frames_to_process):
-            # Per-frame timeout guard
-            if time.time() - phase_start > PHASE_TIMEOUTS['frame_analysis']:
-                logger.warning(f"Frame analysis phase timed out at frame {i}/{frames_to_process}")
+            # ── Total phase budget check ───────────────────────────────────
+            elapsed = time.time() - phase_start
+            if elapsed > PHASE_TIMEOUTS['frame_analysis']:
+                logger.warning(
+                    f"Phase 2 total timeout reached at frame {i}/{frames_to_process} "
+                    f"after {elapsed:.1f}s"
+                )
                 save_job(job_id, status='processing', progress=50,
                          message=(
-                             f'⚠️ Phase 2/5 — Face analysis timed out after '
-                             f'{PHASE_TIMEOUTS["frame_analysis"]}s '
-                             f'(processed {i}/{frames_to_process} frames). '
-                             'Continuing with partial results...'
+                             f'⚠️ Phase 2/5 — Face analysis hit the {PHASE_TIMEOUTS["frame_analysis"]}s '
+                             f'time limit (processed {i}/{frames_to_process} frames, '
+                             f'{timed_out_frames} frames timed out individually). '
+                             'Continuing to next phase with partial data...'
                          ))
                 break
 
@@ -280,11 +305,29 @@ def analyze_video(video_path: str, job_id: str, filename: str):
 
                     try:
                         img = plt.imread(temp_path)
-                        detected = detector.detect_emotions(img)
-                        if detected:
-                            emotions_data.extend(detected)
-                    except Exception as fe:
-                        logger.debug(f"Frame {i} FER error: {fe}")
+
+                        # ── Hard per-frame timeout via ThreadPoolExecutor ──
+                        # detect_emotions() is a blocking C/PyTorch call.
+                        # future.result(timeout=N) lets us abandon it if it
+                        # exceeds PER_FRAME_TIMEOUT without hanging the loop.
+                        _executor = ThreadPoolExecutor(max_workers=1)
+                        _future = _executor.submit(detector.detect_emotions, img)
+                        _executor.shutdown(wait=False)  # don't block on cleanup
+
+                        try:
+                            detected = _future.result(timeout=PER_FRAME_TIMEOUT)
+                            if detected:
+                                emotions_data.extend(detected)
+                        except FutureTimeoutError:
+                            timed_out_frames += 1
+                            logger.warning(
+                                f"Frame {i} FER call exceeded {PER_FRAME_TIMEOUT}s — skipping"
+                            )
+                        except Exception as fer_err:
+                            logger.debug(f"Frame {i} FER error: {fer_err}")
+
+                    except Exception as read_err:
+                        logger.debug(f"Frame {i} image read error: {read_err}")
                     finally:
                         if os.path.exists(temp_path):
                             os.remove(temp_path)
@@ -292,18 +335,27 @@ def analyze_video(video_path: str, job_id: str, filename: str):
                 # Progress update every 5 frames
                 if i % 5 == 0:
                     pct = 15 + ((i + 1) / frames_to_process * 35)
-                    save_job(job_id, status='processing', progress=int(min(pct, 50)),
-                             message=f'🔍 Phase 2/5 — Analysing faces: '
-                                     f'frame {i+1}/{frames_to_process}...')
+                    elapsed_now = time.time() - phase_start
+                    save_job(job_id, status='processing',
+                             progress=int(min(pct, 50)),
+                             message=(
+                                 f'🔍 Phase 2/5 — Analysing faces: '
+                                 f'frame {i+1}/{frames_to_process} '
+                                 f'({elapsed_now:.0f}s elapsed)...'
+                             ))
 
-            except Exception as e:
-                logger.debug(f"Frame {i} processing error: {e}")
+            except Exception as frame_err:
+                logger.debug(f"Frame {i} outer error: {frame_err}")
                 continue
 
         if vidcap:
             vidcap.release()
 
-        logger.info(f"Total face detections: {len(emotions_data)}")
+        logger.info(
+            f"Phase 2 complete — detections: {len(emotions_data)}, "
+            f"timed-out frames: {timed_out_frames}, "
+            f"elapsed: {time.time() - phase_start:.1f}s"
+        )
 
         # ── Phase 3: Generate emotion heatmap ─────────────────────────────
         save_job(job_id, status='processing', progress=52,

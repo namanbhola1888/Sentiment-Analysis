@@ -1,9 +1,11 @@
-# .dockerignore
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
+
+# Virtual environments
 env/
 venv/
 .venv/
@@ -33,10 +35,25 @@ Thumbs.db
 .git/
 .gitignore
 
-# Python
+# Python packaging
 *.egg-info/
 dist/
 build/
 
-# Uploads (don't copy uploaded videos)
+# Uploads (don't copy uploaded videos into the image)
 uploads/
+
+# Test / sample media (can be large, not needed in container)
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.mp3
+*.wav
+
+# Images generated during analysis
+Images/
+*.png
+
+# Gemini agent data
+.agents/
