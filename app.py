@@ -1,7 +1,17 @@
+# ── GPU / CUDA disabled (Render & other CPU-only hosts) ────────────────────
+# These MUST be set before tensorflow/torch/FER are imported.
+# TensorFlow reads CUDA_VISIBLE_DEVICES during its C++ initialisation;
+# setting it after `import tensorflow` has no effect.
+import os
+os.environ.setdefault('CUDA_VISIBLE_DEVICES', '')        # empty = no GPU visible
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '3')       # suppress TF C++ logs
+os.environ.setdefault('TF_ENABLE_ONEDNN_OPTS', '0')      # suppress oneDNN warnings
+os.environ.setdefault('TF_FORCE_GPU_ALLOW_GROWTH', 'true')
+# ---------------------------------------------------------------------------
+
 from flask import Flask, request, jsonify, send_file, Response, render_template
 from flask_cors import CORS
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
-import os
 import uuid
 import threading
 import json

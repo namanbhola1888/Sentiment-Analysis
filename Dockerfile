@@ -66,10 +66,19 @@ EXPOSE 5000
 
 ENV PYTHONUNBUFFERED=1
 ENV FLASK_ENV=production
-# Tell matplotlib/FER to run headless
 ENV MPLBACKEND=Agg
+
+# ── Force CPU-only TensorFlow / PyTorch ─────────────────────────────────────
+# Render free tier has no GPU. Without these, TF probes for CUDA at startup,
+# finds partial CUDA runtime libs on the host, and crashes with error 303.
+ENV CUDA_VISIBLE_DEVICES=""
+ENV TF_CPP_MIN_LOG_LEVEL=3
+ENV TF_ENABLE_ONEDNN_OPTS=0
+ENV TF_FORCE_GPU_ALLOW_GROWTH=true
+# ─────────────────────────────────────────────────────────────────────────────
 
 HEALTHCHECK --interval=60s --timeout=10s --start-period=90s --retries=3 \
     CMD curl -fs http://localhost:5000/api/health || exit 1
 
 CMD ["python", "app.py"]
+
