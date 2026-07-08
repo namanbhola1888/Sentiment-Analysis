@@ -126,7 +126,7 @@ def allowed_file(filename):
 
 def get_ffmpeg_path():
     """Detect FFmpeg path — Docker first, then Windows local, then system PATH."""
-    is_docker = os.path.exists('/.dockerenv')
+    is_docker = os.environ.get('RENDER') or os.path.exists('/.dockerenv')
 
     if is_docker:
         ffmpeg_path = shutil.which('ffmpeg')
@@ -255,8 +255,8 @@ def analyze_video(video_path: str, job_id: str, filename: str):
         # Use Haar-cascade fallback (no MTCNN) on deployed servers — MTCNN on
         # CPU is extremely slow (15-30s per frame) and causes the phase to time out.
         # MTCNN is only worth using if you have a GPU.
-        is_docker = os.path.exists('/.dockerenv')
-        use_mtcnn = not is_docker  # MTCNN locally only; Haar on server
+        is_server = os.environ.get('RENDER') or os.path.exists('/.dockerenv')
+        use_mtcnn = not is_server  # MTCNN locally only; Haar on server
         try:
             detector = FER(mtcnn=use_mtcnn)
             logger.info(f"FER initialised — mtcnn={use_mtcnn}")
